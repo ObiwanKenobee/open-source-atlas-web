@@ -214,6 +214,7 @@ export interface AgentContribution {
   id: string;
   decisionId: string;
   agentId: string;
+  requestedBy: string | null;
   kind: "evidence_gap_flag" | "proposal" | "summary";
   content: string;
   status: "pending" | "accepted" | "rejected";
@@ -263,7 +264,7 @@ export interface Permissions {
   addCorrection: boolean;
   resolveCorrection: boolean;
   addLesson: boolean;
-  runOracle: boolean;
+  runOracleScan: boolean;
   reviewContribution: boolean;
   editDecision: boolean;
 }

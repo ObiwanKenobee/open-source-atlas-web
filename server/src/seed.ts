@@ -1,14 +1,36 @@
 import { rmSync } from "node:fs";
 import { defaultDbPath, insertRow, openDb } from "./db.ts";
 import { ensureBaseActors } from "./actors.ts";
+import { setAccount } from "./auth.ts";
 import { getSnapshot, logEvent, oracleFindings } from "./service.ts";
 
-for (const suffix of ["", "-wal", "-shm"]) {
-  rmSync(`${defaultDbPath}${suffix}`, { force: true });
+if (process.env.NODE_ENV === "production") {
+  console.error("Refusing to seed synthetic demo accounts in production.");
+  process.exit(1);
 }
 
-const db = openDb();
+const targetDbPath = process.env.ATLAS_DB ?? defaultDbPath;
+
+for (const suffix of ["", "-wal", "-shm"]) {
+  rmSync(`${targetDbPath}${suffix}`, { force: true });
+}
+
+const db = openDb(targetDbPath);
 ensureBaseActors(db);
+
+const DEMO_PASSWORD = "atlas-demo-2026";
+const DEMO_ACCOUNTS = [
+  ["actor-analyst-1", "grace@atlas.test"],
+  ["actor-analyst-2", "peter@atlas.test"],
+  ["actor-authorizer-1", "ruth@atlas.test"],
+  ["actor-implementer-1", "samuel@atlas.test"],
+  ["actor-verifier-1", "esther@atlas.test"],
+  ["actor-steward-1", "daniel@atlas.test"],
+] as const;
+
+for (const [actorId, email] of DEMO_ACCOUNTS) {
+  setAccount(db, actorId, email, DEMO_PASSWORD);
+}
 
 const GRACE = "actor-analyst-1";
 const PETER = "actor-analyst-2";
@@ -426,6 +448,7 @@ insertRow(db, "agent_contributions", {
   id: "contrib-water-open-correction",
   decisionId: WATER,
   agentId: ORACLE,
+  requestedBy: DANIEL,
   kind: "evidence_gap_flag",
   content: JSON.stringify({
     findings,
@@ -530,3 +553,6 @@ console.log("Seeded synthetic demonstration data:");
 console.log(`  ${WATER} — verified, one open correction, LEARN blocked`);
 console.log(`  ${WASH} — understanding, no alternatives yet`);
 console.log(`  ${FLOOD} — draft, no evidence yet`);
+console.log("");
+console.log("Development accounts (synthetic, not for production):");
+for (const [, email] of DEMO_ACCOUNTS) console.log(`  ${email}  ${DEMO_PASSWORD}`);

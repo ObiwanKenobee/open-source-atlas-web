@@ -503,6 +503,9 @@ export function ContributionList({
                 </h3>
                 <p className="meta">
                   {formatDateTime(contribution.createdAt)}
+                  {contribution.requestedBy
+                    ? ` · requested by ${actorMap[contribution.requestedBy]?.name ?? shortId(contribution.requestedBy)}`
+                    : ""}
                   {parsed.method ? ` · ${parsed.method}` : ""}
                 </p>
               </div>

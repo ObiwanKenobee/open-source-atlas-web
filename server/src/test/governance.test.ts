@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { FastifyInstance } from "fastify";
-import { openDb } from "../db.ts";
-import { ensureBaseActors } from "../actors.ts";
+import { DomainError, openDb } from "../db.ts";
+import { ensureBaseActors, getActor } from "../actors.ts";
 import { buildApp } from "../app.ts";
+import { createSession, SESSION_COOKIE } from "../auth.ts";
+import {
+  createAuthorization,
+  createDecision,
+  reviewContribution,
+  transition,
+} from "../service.ts";
 
 const GRACE = "actor-analyst-1";
 const PETER = "actor-analyst-2";
@@ -12,21 +19,36 @@ const SAMUEL = "actor-implementer-1";
 const ESTHER = "actor-verifier-1";
 const DANIEL = "actor-steward-1";
 const ORACLE = "agent-oracle";
+const HUMANS = [GRACE, PETER, RUTH, SAMUEL, ESTHER, DANIEL];
 
 interface Response {
   status: number;
   body: any;
 }
 
+const sessionTokens = new WeakMap<FastifyInstance, Map<string, string>>();
+
 function setup(t: TestContext) {
   const db = openDb(":memory:");
   ensureBaseActors(db);
+  const tokens = new Map<string, string>();
+  for (const actorId of HUMANS) {
+    tokens.set(actorId, createSession(db, actorId).token);
+  }
   const app = buildApp(db);
+  sessionTokens.set(app, tokens);
   t.after(async () => {
     await app.close();
     db.close();
   });
   return { db, app };
+}
+
+function assertForbidden(fn: () => unknown): void {
+  assert.throws(
+    fn,
+    (error: unknown) => error instanceof DomainError && error.status === 403,
+  );
 }
 
 async function send(
@@ -36,10 +58,12 @@ async function send(
   actorId: string,
   payload?: unknown,
 ): Promise<Response> {
+  const token = sessionTokens.get(app)?.get(actorId);
+  if (!token) throw new Error(`No test session for ${actorId}. Agents do not hold sessions.`);
   const response = await app.inject({
     method,
     url,
-    headers: { "x-actor-id": actorId },
+    headers: { cookie: `${SESSION_COOKIE}=${token}` },
     ...(payload === undefined ? {} : { payload: payload as object }),
   });
   let body: any = null;
@@ -170,21 +194,23 @@ async function driveToVerified(app: FastifyInstance): Promise<string> {
   return id;
 }
 
-test("an AI agent cannot create, authorize, or advance a decision", async (t) => {
-  const { app } = setup(t);
-  const open = await send(app, "POST", "/api/decisions", ORACLE, { title: "Agent decision" });
-  assert.equal(open.status, 403);
+test("an AI agent cannot authenticate, create, authorize, or advance a decision", async (t) => {
+  const { db, app } = setup(t);
+  assertForbidden(() => createSession(db, ORACLE));
 
   const id = await driveToEvaluated(app);
-  const transition = await send(app, "POST", `/api/decisions/${id}/transitions`, ORACLE, { to: "authorized" });
-  assert.equal(transition.status, 403);
+  const oracle = getActor(db, ORACLE);
+  assert.ok(oracle);
 
-  const authorization = await send(app, "POST", `/api/decisions/${id}/authorizations`, ORACLE, {
-    scope: "Agent scope",
-    conditions: "None",
-    coiDeclaration: "None",
-  });
-  assert.equal(authorization.status, 403);
+  assertForbidden(() => createDecision(db, oracle, { title: "Agent decision" }));
+  assertForbidden(() => transition(db, oracle, id, "authorized"));
+  assertForbidden(() =>
+    createAuthorization(db, oracle, id, {
+      scope: "Agent scope",
+      conditions: "None",
+      coiDeclaration: "None",
+    }),
+  );
 });
 
 test("advancing to understanding reports unmet requirements instead of silently passing", async (t) => {
@@ -366,18 +392,17 @@ test("learning is blocked until corrections are resolved and a lesson is recorde
   assert.equal(learned.status, 200);
 });
 
-test("agent output is advisory: only a person can review it, and it changes no state", async (t) => {
-  const { app } = setup(t);
+test("agent output is advisory: a person requests it, only a person reviews it, and it changes no state", async (t) => {
+  const { db, app } = setup(t);
   const id = await driveToVerified(app);
   const before = await send(app, "GET", `/api/decisions/${id}`, DANIEL);
 
-  const scan = await send(app, "POST", `/api/decisions/${id}/oracle-scan`, ORACLE, {});
+  const scan = await send(app, "POST", `/api/decisions/${id}/oracle-scan`, DANIEL, {});
   assert.equal(scan.status, 201);
 
-  const selfReview = await send(app, "PATCH", `/api/contributions/${scan.body.id}`, ORACLE, {
-    status: "accepted",
-  });
-  assert.equal(selfReview.status, 403);
+  const oracle = getActor(db, ORACLE);
+  assert.ok(oracle);
+  assertForbidden(() => reviewContribution(db, oracle, scan.body.id, "accepted"));
 
   const accepted = await send(app, "PATCH", `/api/contributions/${scan.body.id}`, DANIEL, {
     status: "accepted",
@@ -388,6 +413,9 @@ test("agent output is advisory: only a person can review it, and it changes no s
   const after = await send(app, "GET", `/api/decisions/${id}`, DANIEL);
   assert.equal(after.body.decision.status, before.body.decision.status);
   assert.equal(after.body.outcomes.length, before.body.outcomes.length);
+  const contribution = after.body.contributions.find((c: { id: string }) => c.id === scan.body.id);
+  assert.equal(contribution.requestedBy, DANIEL);
+  assert.equal(contribution.agentId, ORACLE);
 });
 
 test("the audit log records each stage change", async (t) => {

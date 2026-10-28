@@ -125,7 +125,7 @@ export function DecisionView({
   async function runScan() {
     setScanning(true);
     try {
-      await api.runOracle(decision.id);
+      await api.runOracleScan(decision.id);
       onRefresh();
       notify("Oracle scan recorded as an agent contribution. A person must review it.");
     } catch (error) {
@@ -389,11 +389,16 @@ export function DecisionView({
           <Section
             index="11"
             title="Agent review"
-            subtitle="Bounded analytical assistants. Output is advisory, labelled, and requires human review. Oracle here uses deterministic rules, not a language model."
+            subtitle={`Bounded analytical assistants. Output is advisory, labelled, and requires human review. Oracle here uses deterministic rules, not a language model.${roleHint(
+              permissions.runOracleScan,
+              "Only an analyst or steward may request a scan.",
+            )}`}
             actions={
-              <Button size="sm" onClick={runScan} disabled={scanning}>
-                {scanning ? "Scanning…" : "Run Oracle scan"}
-              </Button>
+              permissions.runOracleScan ? (
+                <Button size="sm" onClick={runScan} disabled={scanning}>
+                  {scanning ? "Scanning…" : "Run Oracle scan"}
+                </Button>
+              ) : null
             }
           >
             <ContributionList

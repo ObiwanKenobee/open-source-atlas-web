@@ -14,6 +14,21 @@ CREATE TABLE IF NOT EXISTS actors (
   )
 );
 
+CREATE TABLE IF NOT EXISTS accounts (
+  actor_id TEXT PRIMARY KEY REFERENCES actors(id) ON DELETE CASCADE,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0,1)),
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -167,6 +182,7 @@ CREATE TABLE IF NOT EXISTS agent_contributions (
   id TEXT PRIMARY KEY,
   decision_id TEXT NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
   agent_id TEXT NOT NULL REFERENCES actors(id),
+  requested_by TEXT REFERENCES actors(id),
   kind TEXT NOT NULL CHECK (kind IN ('evidence_gap_flag','proposal','summary')),
   content TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected')),
@@ -186,6 +202,8 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_actor ON sessions(actor_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_observations_decision ON observations(decision_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_decision ON evidence(decision_id);
 CREATE INDEX IF NOT EXISTS idx_alternatives_decision ON alternatives(decision_id);

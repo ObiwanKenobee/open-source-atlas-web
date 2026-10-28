@@ -26,13 +26,13 @@ import {
   updateRow,
 } from "./db.ts";
 import {
-  GUEST_ACTOR,
   nextStage,
   permissions,
   readiness,
   transitionPermission,
   type Snapshot,
 } from "./gates.ts";
+import { getActor } from "./actors.ts";
 
 function text(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -114,7 +114,7 @@ export function getSnapshot(db: DatabaseSync, id: string): Snapshot {
   };
 }
 
-export function getPayload(db: DatabaseSync, id: string, actor: Actor = GUEST_ACTOR): DecisionPayload {
+export function getPayload(db: DatabaseSync, id: string, actor: Actor): DecisionPayload {
   const snapshot = getSnapshot(db, id);
   return {
     ...snapshot,
@@ -845,18 +845,25 @@ export function oracleFindings(snapshot: Snapshot): OracleFinding[] {
 }
 
 export function runOracleScan(db: DatabaseSync, actor: Actor, id: string): string {
-  if (!actor.isAgent || actor.agentRole !== "oracle") {
-    throw new DomainError(403, "agent_required", "Only the Oracle agent may run this scan.");
-  }
   const snapshot = getSnapshot(db, id);
-  logEvent(db, id, actor.id, "oracle.scan", "Oracle ran a deterministic evidence-gap scan");
+  requireHuman(actor, "Only a person may request an Oracle scan.");
+  requirePermission(
+    permissions(actor, snapshot).runOracleScan,
+    "Only an analyst or steward may request the deterministic Oracle scan.",
+  );
+  const oracle = getActor(db, "agent-oracle");
+  if (!oracle || !oracle.isAgent) {
+    throw new DomainError(500, "agent_missing", "The Oracle agent is not configured.");
+  }
+  logEvent(db, id, actor.id, "oracle.requested", "Requested a deterministic Oracle evidence-gap scan");
   const findings = oracleFindings(snapshot);
   const contributionId = randomUUID();
   const at = nowIso();
   insertRow(db, "agent_contributions", {
     id: contributionId,
     decisionId: id,
-    agentId: actor.id,
+    agentId: oracle.id,
+    requestedBy: actor.id,
     kind: "evidence_gap_flag",
     content: JSON.stringify({
       findings,
@@ -869,7 +876,7 @@ export function runOracleScan(db: DatabaseSync, actor: Actor, id: string): strin
     reviewedAt: null,
     createdAt: at,
   });
-  logEvent(db, id, actor.id, "contribution.created", `Oracle scan produced ${findings.length} finding(s)`, at);
+  logEvent(db, id, oracle.id, "contribution.created", `Oracle scan produced ${findings.length} finding(s)`, at);
   return contributionId;
 }
 

@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Actor } from "../../shared/types.ts";
 import {
-  AGENT_ROLES,
   EVIDENCE_SOURCES,
   EXECUTION_STATES,
   INSTRUMENTS,
@@ -11,8 +10,7 @@ import {
   STATUSES,
 } from "../../shared/types.ts";
 import { DomainError, nowIso } from "./db.ts";
-import { getActor, listActors } from "./actors.ts";
-import { GUEST_ACTOR } from "./gates.ts";
+import { listActors } from "./actors.ts";
 import {
   addAlternative,
   addCorrection,
@@ -181,44 +179,41 @@ const contributionReviewSchema = z.object({
   note: z.string().max(2000).nullish(),
 });
 
-const agentScanSchema = z.object({
-  agentId: z.enum(AGENT_ROLES).optional(),
-});
+function requireActor(request: FastifyRequest): Actor {
+  if (!request.actor) {
+    throw new DomainError(401, "authentication_required", "Sign in to use the decision engine.");
+  }
+  return request.actor;
+}
 
 export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
-  function resolveActor(request: FastifyRequest, required: boolean): Actor {
-    const header = request.headers["x-actor-id"];
-    const id = Array.isArray(header) ? header[0] : header;
-    if (!id) {
-      if (!required) return GUEST_ACTOR;
-      throw new DomainError(401, "actor_required", "Select an acting identity to modify records.");
-    }
-    const actor = getActor(db, id);
-    if (!actor) throw new DomainError(401, "actor_unknown", "Unknown acting identity.");
-    return actor;
-  }
-
   app.get("/api/health", async () => ({ ok: true, service: "atlas-decision-engine" }));
 
-  app.get("/api/actors", async () => ({ actors: listActors(db) }));
+  app.get("/api/actors", async (request) => {
+    requireActor(request);
+    return { actors: listActors(db) };
+  });
 
-  app.get("/api/decisions", async () => ({ decisions: listDecisions(db) }));
+  app.get("/api/decisions", async (request) => {
+    requireActor(request);
+    return { decisions: listDecisions(db) };
+  });
 
   app.post("/api/decisions", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const input = decisionCreateSchema.parse(request.body);
     const id = createDecision(db, actor, input);
     return reply.code(201).send({ id });
   });
 
   app.get("/api/decisions/:id", async (request) => {
-    const actor = resolveActor(request, false);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     return getPayload(db, id, actor);
   });
 
   app.get("/api/decisions/:id/export", async (request, reply) => {
-    const actor = resolveActor(request, false);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const payload = getPayload(db, id, actor);
     reply.header("Content-Disposition", `attachment; filename="atlas-decision-${id}.json"`);
@@ -231,7 +226,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.patch("/api/decisions/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const patch = decisionPatchSchema.parse(request.body);
     updateDecision(db, actor, id, patch as Record<string, unknown>);
@@ -239,7 +234,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/observations", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = observationSchema.parse(request.body);
     const observationId = addObservation(db, actor, id, input);
@@ -247,7 +242,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/evidence", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = evidenceSchema.parse(request.body);
     const evidenceId = addEvidence(db, actor, id, input);
@@ -255,7 +250,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.patch("/api/evidence/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = evidenceReviewSchema.parse(request.body);
     reviewEvidence(db, actor, id, input.status, input.note);
@@ -263,7 +258,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/alternatives", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = alternativeSchema.parse(request.body);
     const alternativeId = addAlternative(db, actor, id, input);
@@ -271,7 +266,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.patch("/api/alternatives/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const patch = alternativePatchSchema.parse(request.body);
     updateAlternative(db, actor, id, patch);
@@ -279,7 +274,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/authorizations", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = authorizationSchema.parse(request.body);
     const authorizationId = createAuthorization(db, actor, id, input);
@@ -287,7 +282,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/resources", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = resourceSchema.parse(request.body);
     const resourceId = createResource(db, actor, id, input);
@@ -295,7 +290,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/executions", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = executionSchema.parse(request.body);
     const executionId = createExecution(db, actor, id, input);
@@ -303,7 +298,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.patch("/api/executions/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const patch = executionPatchSchema.parse(request.body);
     updateExecution(db, actor, id, patch);
@@ -311,7 +306,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/outcomes", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = outcomeSchema.parse(request.body);
     const outcomeId = createOutcome(db, actor, id, input);
@@ -319,7 +314,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/corrections", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = correctionSchema.parse(request.body);
     const correctionId = addCorrection(db, actor, id, input);
@@ -327,7 +322,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.patch("/api/corrections/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = correctionPatchSchema.parse(request.body);
     resolveCorrection(db, actor, id, input.resolution);
@@ -335,7 +330,7 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/lessons", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = lessonSchema.parse(request.body);
     const lessonId = addLesson(db, actor, id, input);
@@ -343,22 +338,21 @@ export function registerRoutes(app: FastifyInstance, db: DatabaseSync): void {
   });
 
   app.post("/api/decisions/:id/transitions", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = transitionSchema.parse(request.body);
     return transition(db, actor, id, input.to);
   });
 
   app.post("/api/decisions/:id/oracle-scan", async (request, reply) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
-    agentScanSchema.parse(request.body ?? {});
     const contributionId = runOracleScan(db, actor, id);
     return reply.code(201).send({ id: contributionId });
   });
 
   app.patch("/api/contributions/:id", async (request) => {
-    const actor = resolveActor(request, true);
+    const actor = requireActor(request);
     const { id } = request.params as { id: string };
     const input = contributionReviewSchema.parse(request.body);
     reviewContribution(db, actor, id, input.status, input.note);

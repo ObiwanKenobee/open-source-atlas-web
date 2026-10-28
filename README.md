@@ -11,6 +11,8 @@ Our founding conviction is simple:
 
 > Intelligence becomes valuable when it helps people act wisely and serve faithfully.
 
+> **Working code in this repository:** a synthetic, local-only prototype of the Decision Engine, including a seven-stage decision record, evidence and authorization trails, session authentication, and governance tests. It is not deployed and contains no real data. See [Working Prototype](#working-prototype).
+
 ---
 
 ## Our Mission
@@ -195,7 +197,140 @@ The first pilot should be selected with participating communities and institutio
 
 The objective is to demonstrate a working evidence-to-action cycle before expanding into a broader platform.
 
+## Working Prototype
+
+> **Status:** a working, local-only prototype of the Decision Engine. It is not deployed, has no institutional partner, and contains no real evidence, financial commitments, or measured outcomes. Every record is synthetic and labelled as such.
+
+### What works today
+
+- **Seven-stage lifecycle:** `draft → understanding → evaluated → authorized → executing → verified → learned`, with transitions enforced on the server rather than only in the interface.
+- **Seven record classes:** observations, evidence, alternatives, authorizations, resource commitments, executions, and outcomes, plus corrections, lessons, agent contributions, and an append-only activity log.
+- **Evidence discipline:** evidence is proposed by one person and accepted by a second; contributors cannot review their own evidence.
+- **Authorization discipline:** a named authorizer records scope, conditions, and a conflict-of-interest declaration; the acting authorizer must match the record.
+- **Honest outcome classification:** outcomes are marked `observed`, `estimated`, `attributed`, or `uncertain`; attributed claims require a documented method, and estimates are never presented as observed impact.
+- **Independent verification:** the verifier must differ from the authorizer.
+- **Learning gate:** a decision cannot close until corrections are resolved and a lesson is recorded.
+- **Bounded agent assistance:** the Oracle scan is deterministic (no language model), requested by a person, attributed to both the agent and the requester, and changeable only by human review.
+- **Session authentication:** named accounts with roles replace the earlier placeholder identity header.
+- **End-to-end demonstration:** the synthetic Nakuru water-point reliability decision exercises the full cycle; two additional synthetic decisions show earlier and blocked stages.
+
+### Stack
+
+| Layer | Implementation |
+|---|---|
+| Runtime | Node.js 24 (required for the built-in `node:sqlite` module) |
+| API | Fastify 5, Zod validation, TypeScript (strict, NodeNext) |
+| Storage | SQLite via `node:sqlite`; schema in `server/src/schema.sql` |
+| Interface | React 19, Vite 7, custom CSS design system |
+| Tests | Node's built-in test runner (`node:test`) via `tsx` |
+
+### Run locally
+
+```bash
+# Node 24 must be first on PATH; with Homebrew:
+export PATH="/opt/homebrew/bin:$PATH"
+
+npm install
+npm run seed
+npm run dev
+```
+
+- Web interface: <http://localhost:5173>
+- API: <http://127.0.0.1:8787>
+
+The seed script recreates the database, so **stop the API server before reseeding** and restart it afterwards. SQLite holds the old file open; reseeding underneath a running server leaves it attached to a deleted file.
+
+`npm run seed` writes to `server/data/atlas.db` unless `ATLAS_DB` is set. The server and seed script both honor:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ATLAS_DB` | SQLite database path | `server/data/atlas.db` |
+| `PORT` | API port | `8787` |
+| `APP_ORIGINS` | Comma-separated browser origins allowed to make state-changing requests | `http://localhost:5173,http://127.0.0.1:5173` |
+
+Useful commands: `npm test` (server governance and authentication tests), `npm run typecheck`, `npm run build`.
+
+### Development accounts
+
+All accounts share the demo password **`atlas-demo-2026`**. These are synthetic development credentials, not production identities.
+
+| Email | Person | Role | Organization |
+|---|---|---|---|
+| `grace@atlas.test` | Grace Wambui | analyst | Nakuru Community Water Trust (fictional) |
+| `peter@atlas.test` | Peter Otieno | analyst | County Water Office (fictional) |
+| `ruth@atlas.test` | Ruth Kamau | authorizer | Example Foundation (fictional) |
+| `samuel@atlas.test` | Samuel Kipchoge | implementer | Maji Field Services (fictional) |
+| `esther@atlas.test` | Esther Njeri | verifier | Independent Verification Lab (fictional) |
+| `daniel@atlas.test` | Daniel Mwangi | steward | Atlas Sanctum (fictional) |
+
+Roles are enforced on the server: analysts and stewards advance analysis stages, only an authorizer may authorize, implementers record execution, verifiers record outcomes, and stewards close into learning. The Oracle agent has no account and cannot sign in.
+
+### Authentication model
+
+This is **development authentication**, built from standard mechanisms rather than a claimed production identity system.
+
+- Passwords are hashed with `scrypt` (N=16384, r=8, p=1) using a per-account salt.
+- Sessions use opaque 256-bit random tokens. Only a SHA-256 hash of the token is stored in the database.
+- The session cookie is `HttpOnly`, `SameSite=Lax`, `Secure` when `NODE_ENV=production`, and expires after 12 hours. Signing out revokes the server-side session.
+- Login failures are throttled to five attempts per 15 minutes per IP and email, and errors do not reveal whether an account exists.
+- State-changing requests require an allowlisted `Origin` header. Server-to-server clients without an `Origin` are permitted.
+- AI agents cannot hold accounts or sessions. Oracle scans are requested by an authenticated person and reviewed by a person.
+- The seed script refuses to run when `NODE_ENV=production`.
+
+Not implemented: OIDC/SAML, multi-factor authentication, email verification, password reset or account recovery, invitation flows, account lockout policy beyond the login throttle, and organization-level isolation. Do not deploy this authentication model for real institutional use.
+
+### Tested governance invariants
+
+`npm test` currently runs 18 tests covering:
+
+- unauthenticated access is rejected, while health checks remain public;
+- login sets an `HttpOnly` session cookie that authorizes reads and is revoked on logout;
+- repeated wrong passwords are throttled and fail generically; expired, disabled, and agent accounts cannot authenticate;
+- cross-origin state changes are rejected;
+- AI agents cannot authenticate, create, authorize, or advance a decision;
+- stages cannot be skipped and unmet requirements are reported explicitly;
+- evidence contributors cannot review their own evidence;
+- the baseline is immutable once analysis begins;
+- authorization requires scope, a matching authorizer, and a conflict declaration;
+- execution cannot begin without an approved resource commitment;
+- only a verifier may record outcomes, and attributed claims require a method;
+- learning is blocked until corrections are resolved and a lesson is recorded;
+- Oracle output is advisory: a person requests it, only a person reviews it, and it changes no decision state;
+- every stage change is written to the audit log.
+
+### Known limitations
+
+- **Synthetic only.** No real data ingestion, institutional partnership, funding commitment, or field measurement is represented or claimed.
+- **Single tenant.** There is no organization scoping; every signed-in account can read every decision.
+- **Audit log is append-only by convention, not cryptographically chained.** It records who did what and when, but a database administrator could alter rows. A hash chain is planned.
+- **SQLite, not PostgreSQL/PostGIS.** Location data is a single GeoJSON point per decision; there are no spatial queries yet.
+- **No offline mode, localization, or formal accessibility audit.** These are explicit requirements, not completed features.
+- **No production operations.** There is no container image, CI pipeline, backup/restore procedure, observability, rate limiting beyond login, or deployment hardening.
+- **No real agent integration.** The Oracle is a deterministic rule set; no language model or external tool access is used.
+
+### Platform increments
+
+The platform is being built in ordered increments. Only increment 1 is complete.
+
+| # | Increment | Status | Acceptance criterion |
+|---|---|---|---|
+| 1 | Authenticated sessions replace identity header | **Complete** | Named accounts, role enforcement, server-side sessions, rate limiting, and tests |
+| 2 | Organizations and membership scoping | Planned | Every record belongs to an organization; cross-organization access is denied and tested |
+| 3 | Tamper-evident audit chain | Planned | Audit events are hash-chained and a verification endpoint detects alteration |
+| 4 | Decision links and corrected-claim lifecycle | Planned | Corrections and superseding decisions are linked and visible without overwriting history |
+| 5 | Portfolio observatory | Planned | Cross-decision views show stage, evidence, outcome classification, and open corrections honestly |
+| 6 | PostgreSQL, PostGIS, and migrations | Planned | Replace SQLite, add spatial queries, and provide reversible migrations and export |
+| 7 | Offline-first, localization, accessibility | Planned | Queued offline capture, Swahili/English interface, and a documented WCAG audit |
+| 8 | Bounded agent council framework | Planned | Multiple advisory agents with scoped tools, provenance, and mandatory human review |
+| 9 | Evidence ingestion adapters | Planned | Provenance-preserving adapters for tools such as KoboToolbox and OpenFn, with consent controls |
+| 10 | Production operations and CI | Planned | Containerized deployment, CI, observability, backups, threat model, and production identity integration |
+
+Planned increments are intentions, not delivered capabilities. This table will be updated as each increment is verified.
+
 ## Roadmap
+
+*The roadmap below describes institutional maturity. See Working Prototype for what the current code actually implements.*
+
 
 ### Phase 1 — Foundation
 - Define the initial problem and intended users.

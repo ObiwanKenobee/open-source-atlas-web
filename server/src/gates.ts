@@ -34,15 +34,6 @@ export interface Snapshot {
   events: AuditEvent[];
 }
 
-export const GUEST_ACTOR: Actor = {
-  id: "guest",
-  name: "Unauthenticated visitor",
-  organization: "—",
-  role: null,
-  isAgent: false,
-  agentRole: null,
-};
-
 export function nextStage(status: DecisionStatus): DecisionStatus | null {
   const index = STATUSES.indexOf(status);
   return STATUSES[index + 1] ?? null;
@@ -394,7 +385,7 @@ export function permissions(actor: Actor, snapshot: Snapshot): Permissions {
     addCorrection: human && status !== "learned",
     resolveCorrection: human && (role === "steward" || role === "verifier") && status !== "learned",
     addLesson: human && role === "steward" && status === "verified",
-    runOracle: actor.isAgent && actor.agentRole === "oracle",
+    runOracleScan: analyst,
     reviewContribution: human,
     editDecision: analyst && preAuthorization,
   };

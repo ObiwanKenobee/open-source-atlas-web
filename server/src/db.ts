@@ -10,7 +10,7 @@ export const defaultDbPath = join(here, "..", "data", "atlas.db");
 
 export type Row = Record<string, unknown>;
 
-const BOOLEAN_KEYS = new Set(["selected", "synthetic", "isAgent"]);
+const BOOLEAN_KEYS = new Set(["selected", "synthetic", "isAgent", "disabled"]);
 
 function toSnake(key: string): string {
   return key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);

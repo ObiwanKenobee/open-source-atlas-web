@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Actor, DecisionPayload, DecisionSummary } from "@shared/types";
-import { api, errorMessage, setActingActor } from "./lib/api";
+import { api, ApiError, errorMessage } from "./lib/api";
 import { ROLE_LABEL, formatDate } from "./lib/format";
 import { Button, ErrorBlock, StatusChip } from "./components/Common";
 import { DecisionForm } from "./components/Forms";
 import { DecisionView } from "./components/DecisionView";
+import { Login } from "./components/Login";
 
 export default function App() {
+  const [session, setSession] = useState<Actor | null | undefined>(undefined);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [actors, setActors] = useState<Actor[]>([]);
-  const [actingId, setActingId] = useState<string>(() => localStorage.getItem("atlas.acting") ?? "");
   const [decisions, setDecisions] = useState<DecisionSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [payload, setPayload] = useState<DecisionPayload | null>(null);
@@ -20,46 +22,67 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
-  const humans = useMemo(() => actors.filter((actor) => !actor.isAgent), [actors]);
-  const actingActor = useMemo(
-    () => humans.find((actor) => actor.id === actingId) ?? humans[0] ?? null,
-    [humans, actingId],
-  );
-
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const [actorResult, decisionResult] = await Promise.all([api.actors(), api.decisions()]);
+    api
+      .session()
+      .then((result) => {
+        if (!cancelled) setSession(result.actor);
+      })
+      .catch((error) => {
         if (cancelled) return;
-        setActors(actorResult.actors);
-        const available = actorResult.actors.filter((actor) => !actor.isAgent);
-        setActingId((current) => {
-          const stored = available.find((actor) => actor.id === current);
-          const fallback = available.find((actor) => actor.role === "steward") ?? available[0];
-          return stored?.id ?? fallback?.id ?? "";
-        });
-        setDecisions(decisionResult.decisions);
-        setSelectedId(decisionResult.decisions[0]?.id ?? null);
-      } catch (error) {
-        if (!cancelled) setBootError(errorMessage(error));
-      } finally {
-        if (!cancelled) setLoadingList(false);
-      }
-    })();
+        if (error instanceof ApiError && error.status === 401) {
+          setSession(null);
+        } else {
+          setSessionError(errorMessage(error));
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
   useEffect(() => {
-    if (!actingId) return;
-    setActingActor(actingId);
-    localStorage.setItem("atlas.acting", actingId);
-  }, [actingId]);
+    const handleUnauthorized = () => setSession(null);
+    window.addEventListener("atlas:unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("atlas:unauthorized", handleUnauthorized);
+  }, []);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!session) {
+      setActors([]);
+      setDecisions([]);
+      setSelectedId(null);
+      setPayload(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingList(true);
+    setBootError(null);
+    Promise.all([api.actors(), api.decisions()])
+      .then(([actorResult, decisionResult]) => {
+        if (cancelled) return;
+        setActors(actorResult.actors);
+        setDecisions(decisionResult.decisions);
+        setSelectedId((current) =>
+          current && decisionResult.decisions.some((decision) => decision.id === current)
+            ? current
+            : (decisionResult.decisions[0]?.id ?? null),
+        );
+      })
+      .catch((error) => {
+        if (!cancelled) setBootError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingList(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!selectedId || !session) {
       setPayload(null);
       return;
     }
@@ -80,7 +103,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, actingId]);
+  }, [selectedId, session]);
 
   useEffect(() => {
     if (!toast) return;
@@ -118,6 +141,50 @@ export default function App() {
       .catch((error) => setProblem(errorMessage(error)));
   }
 
+  function handleLogin(actor: Actor) {
+    setSessionError(null);
+    setBootError(null);
+    setSession(actor);
+    setToast(`Signed in as ${actor.name}.`);
+  }
+
+  async function signOut() {
+    try {
+      await api.logout();
+    } catch {
+      // The local session is cleared even if the server is unreachable.
+    }
+    setSession(null);
+    setDecisions([]);
+    setSelectedId(null);
+    setPayload(null);
+  }
+
+  if (session === undefined) {
+    return (
+      <div className="login-screen">
+        <div className="loading-panel" aria-live="polite">
+          <span className="loading-rule" />
+          Restoring session…
+        </div>
+      </div>
+    );
+  }
+
+  if (sessionError) {
+    return (
+      <div className="login-screen">
+        <div className="login-error">
+          <ErrorBlock message={sessionError} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Login onSuccess={handleLogin} />;
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -130,24 +197,22 @@ export default function App() {
         </div>
         <div className="topbar-right">
           <span className="topbar-note">Evidence before assertion</span>
-          <label className="acting" title="Prototype identity switch. A production deployment requires authenticated identity and server-side authorization.">
-            <span>Acting as</span>
-            <select value={actingId} onChange={(event) => setActingId(event.target.value)}>
-              {humans.map((actor) => (
-                <option key={actor.id} value={actor.id}>
-                  {actor.name} — {actor.role ? ROLE_LABEL[actor.role] : "person"}
-                </option>
-              ))}
-            </select>
-          </label>
-          {actingActor && <span className="acting-org">{actingActor.organization}</span>}
+          <div className="user-block">
+            <span className="user-name">{session.name}</span>
+            <span className="user-meta">
+              {session.role ? ROLE_LABEL[session.role] : "agent"} · {session.organization}
+            </span>
+          </div>
+          <Button size="sm" variant="ghost" onClick={signOut}>
+            Sign out
+          </Button>
         </div>
       </header>
 
       <div className="synthetic-strip">
         <span className="strip-dot" aria-hidden="true" />
         Synthetic demonstration data. No real findings, institutional partnerships, or financial commitments are
-        represented. The identity switcher is a prototype device, not authentication.
+        represented. Sessions are development authentication, not an institutional identity provider.
       </div>
 
       <div className="frame">
@@ -209,12 +274,12 @@ export default function App() {
             </div>
           ) : payloadError && !payload ? (
             <ErrorBlock message={payloadError} />
-          ) : payload && actingActor ? (
+          ) : payload ? (
             <DecisionView
               key={payload.decision.id}
               payload={payload}
               actors={actors}
-              actingActor={actingActor}
+              actingActor={session}
               onRefresh={refresh}
               notify={setToast}
               onError={(error) => setProblem(errorMessage(error))}

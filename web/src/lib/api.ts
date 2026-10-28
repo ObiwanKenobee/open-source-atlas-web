@@ -4,12 +4,6 @@ import type {
   DecisionSummary,
 } from "@shared/types";
 
-let actingActorId: string | null = null;
-
-export function setActingActor(id: string): void {
-  actingActorId = id;
-}
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -21,12 +15,11 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}, actorOverride?: string): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
-  const actor = actorOverride ?? actingActorId;
-  if (actor) headers["x-actor-id"] = actor;
   const response = await fetch(`/api${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: { ...headers, ...(init.headers as Record<string, string> | undefined) },
   });
   const text = await response.text();
@@ -38,6 +31,9 @@ async function request<T>(path: string, init: RequestInit = {}, actorOverride?: 
   }
   if (!response.ok) {
     const body = (data ?? {}) as { message?: string; error?: string; missing?: string[] };
+    if (response.status === 401 && path !== "/auth/login" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("atlas:unauthorized"));
+    }
     throw new ApiError(
       body.message ?? response.statusText,
       response.status,
@@ -55,6 +51,13 @@ const patch = <T,>(path: string, body: unknown) =>
   request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 
 export const api = {
+  session: () => request<{ actor: Actor }>("/auth/session"),
+  login: (email: string, password: string) =>
+    request<{ actor: Actor }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST", body: "{}" }),
   actors: () => request<{ actors: Actor[] }>("/actors"),
   decisions: () => request<{ decisions: DecisionSummary[] }>("/decisions"),
   decision: (id: string) => request<DecisionPayload>(`/decisions/${id}`),
@@ -74,8 +77,8 @@ export const api = {
   resolveCorrection: (id: string, body: unknown) => patch<{ ok: boolean }>(`/corrections/${id}`, body),
   addLesson: (id: string, body: unknown) => post<{ id: string }>(`/decisions/${id}/lessons`, body),
   transition: (id: string, to: string) => post<unknown>(`/decisions/${id}/transitions`, { to }),
-  runOracle: (id: string) =>
-    request<{ id: string }>(`/decisions/${id}/oracle-scan`, { method: "POST", body: "{}" }, "agent-oracle"),
+  runOracleScan: (id: string) =>
+    request<{ id: string }>(`/decisions/${id}/oracle-scan`, { method: "POST", body: "{}" }),
   reviewContribution: (id: string, body: unknown) => patch<{ ok: boolean }>(`/contributions/${id}`, body),
   exportUrl: (id: string) => `/api/decisions/${id}/export`,
 };
